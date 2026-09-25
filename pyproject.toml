@@ -1,0 +1,7 @@
+[project]
+name = "ahigaobot"
+version = "1.0.0"
+requires-python = ">=3.10"
+
+[tool.vercel]
+entrypoint = "api.webhook:handler"
