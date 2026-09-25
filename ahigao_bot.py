@@ -30,15 +30,16 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 TIMEZONE = ZoneInfo("Europe/Moscow")
 
-# Чат, куда отправляем сообщение при запуске
 STARTUP_CHAT = "@sladkiy_omlet"
 STARTUP_MESSAGE = ""
 
 GEMINI_MODEL = "gemini-3.8-flash"
 OPENROUTER_MODEL = "openrouter/free"
+GROQ_MODEL = "openai/gpt-oss-120b"   # можно поменять на qwen/qwen3.8-27b
 
 MAX_HISTORY = 30
 CHATS_FILE = "chats.json"
@@ -294,6 +295,70 @@ async def ask_gemini(chat_id, user_text):
 
 
 # ============================================================
+# GROQ
+# ============================================================
+
+async def ask_groq(chat_id, user_text):
+    if not GROQ_API_KEY:
+        return None
+
+    history = chat_history.get(chat_id, [])
+
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        }
+    ]
+
+    for item in history[-MAX_HISTORY:]:
+        if item["role"] == "user":
+            messages.append({
+                "role": "user",
+                "content": item["text"],
+            })
+        elif item["role"] == "assistant":
+            messages.append({
+                "role": "assistant",
+                "content": item["text"],
+            })
+
+    messages.append({
+        "role": "user",
+        "content": user_text,
+    })
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.9,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(url, headers=headers, json=payload)
+
+        if response.status_code != 200:
+            print(f"⚠️ Groq HTTP {response.status_code}: {response.text[:500]}")
+            return None
+
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
+
+    except Exception as e:
+        print(f"⚠️ Groq error: {type(e).__name__}: {e}")
+
+    return None
+
+
+# ============================================================
 # OPENROUTER
 # ============================================================
 
@@ -363,12 +428,17 @@ async def ask_openrouter(chat_id, user_text):
 async def ask_ai(chat_id, user_text):
     add_to_history(chat_id, "user", user_text)
 
-    # Gemini
+    # 1. Gemini
     answer = await ask_gemini(chat_id, user_text)
 
-    # OpenRouter
+    # 2. Groq
     if not answer:
-        print("🔄 Gemini не ответил, пробую OpenRouter...")
+        print("🔄 Gemini не ответил, пробую Groq...")
+        answer = await ask_groq(chat_id, user_text)
+
+    # 3. OpenRouter
+    if not answer:
+        print("🔄 Groq не ответил, пробую OpenRouter...")
         answer = await ask_openrouter(chat_id, user_text)
 
     # Fallback
@@ -487,7 +557,7 @@ async def start_schedule_command(update: Update, context: ContextTypes.DEFAULT_T
 
 
 # ============================================================
-# TEXT MESSAGE  (ИСПРАВЛЕННЫЙ)
+# TEXT MESSAGE
 # ============================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -517,7 +587,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_info = await context.bot.get_me()
     bot_username = f"@{bot_info.username}".lower() if bot_info.username else ""
 
-    # Варианты имени бота (учитываем регистр + смешанное написание)
+    # Варианты имени бота
     name_variants = [
         "ахигао",
         "ахигao",
@@ -529,7 +599,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mentioned_by_name = any(name in text_lower for name in name_variants)
     mentioned_by_username = bool(bot_username and bot_username in text_lower)
 
-    # Проверяем, является ли сообщение ответом на бота
+    # Проверяем reply на бота
     is_reply_to_bot = False
     if message.reply_to_message and message.reply_to_message.from_user:
         if message.reply_to_message.from_user.id == bot_info.id:
